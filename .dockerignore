@@ -1,0 +1,15 @@
+.git/
+.circleci/
+.github/
+bin/
+vendor/
+example/
+
+.gitignore
+.goreleaser.yml
+
+Dockerfile
+*.Dockerfile
+docker-compose.yml
+
+__debug_bin

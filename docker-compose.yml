@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  ipdr:
+    build:
+        context: ./
+        dockerfile: build.Dockerfile
+    image: miguelmota/ipdr
+    environment:
+      - IPFS_PATH=/data/ipfs
+    # command: ipdr server --port 5000 --ipfs-gateway http://host.docker.internal:8080 --ipfs-host host.docker.internal:5001
+    command: ipdr server --port 5000 --ipfs-gateway http://ipfs:8080 --ipfs-host ipfs:5001
+    restart: always
+    ports:
+      - "5000:5000" 
+    volumes:
+      - $HOME/.ipdr/ipfs/data:/data/ipfs
+      # - ipfs_data:/data/ipfs
+
+  ipfs:
+    image: ipfs/go-ipfs
+    environment: 
+      - IPFS_PATH=/data/ipfs
+    restart: always
+    ports:
+      # Swarm TCP; should be exposed to the public
+      - "4001:4001"
+      # Swarm UDP; should be exposed to the public
+      - "4001:4001/udp"
+      # Daemon API; must not be exposed publicly but to client services under you control
+      - "5001:5001"
+      # Web Gateway; can be exposed publicly with a proxy, e.g. as https://ipfs.example.org
+      - "8080:8080"
+      # Swarm Websockets; must be exposed publicly when the node is listening using the websocket transport (/ipX/.../tcp/8081/ws).
+      - "8081:8081"
+    volumes:
+      - $HOME/.ipdr/ipfs/export:/export
+      - $HOME/.ipdr/ipfs/data:/data/ipfs
+      # - ipfs_export:/export
+      # - ipfs_data:/data/ipfs
+
+volumes:
+  ipfs_data:
+  ipfs_export:
