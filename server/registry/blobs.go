@@ -20,14 +20,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
-
-	"github.com/miguelmota/ipdr/netutil"
 )
 
 // Returns whether this url should be handled by the blob handler
@@ -104,38 +101,19 @@ func (b *blobs) handle(resp http.ResponseWriter, req *http.Request) *regError {
 				Message: err.Error(),
 			}
 		}
-		uri := b.registry.ipfsURL([]string{cid, "blobs", target})
-		ipfsResp, err := http.Head(uri)
-		if err != nil {
+
+		found := b.registry.store.HasBlob(cid, target)
+		if !found {
 			return &regError{
 				Status:  http.StatusNotFound,
 				Code:    "BLOB_UNKNOWN",
-				Message: err.Error(),
-			}
-		}
-		defer ipfsResp.Body.Close()
-		if ipfsResp.StatusCode != http.StatusOK {
-			return &regError{
-				Status:  http.StatusNotFound,
-				Code:    "BLOB_UNKNOWN",
-				Message: ipfsResp.Status,
+				Message: "not found",
 			}
 		}
 
-		body, err := ioutil.ReadAll(ipfsResp.Body)
-		size := len(body)
-		if err != nil {
-			return &regError{
-				Status:  http.StatusNotFound,
-				Code:    "BLOB_UNKNOWN",
-				Message: err.Error(),
-			}
-		}
-
-		resp.Header().Set("Content-Length", fmt.Sprint(size))
+		resp.Header().Set("Content-Length", "0")
 		resp.Header().Set("Docker-Content-Digest", target)
-		resp.WriteHeader(ipfsResp.StatusCode)
-		io.CopyN(resp, bytes.NewReader(body), int64(size))
+		resp.WriteHeader(http.StatusOK)
 
 		return nil
 	}
@@ -149,8 +127,8 @@ func (b *blobs) handle(resp http.ResponseWriter, req *http.Request) *regError {
 				Message: err.Error(),
 			}
 		}
-		uri := b.registry.ipfsURL([]string{cid, "blobs", target})
-		ipfsResp, err := netutil.Get(uri)
+
+		body, err := b.registry.store.GetBlob(cid, target)
 		if err != nil {
 			return &regError{
 				Status:  http.StatusNotFound,
@@ -158,22 +136,10 @@ func (b *blobs) handle(resp http.ResponseWriter, req *http.Request) *regError {
 				Message: err.Error(),
 			}
 		}
-		defer ipfsResp.Body.Close()
-		if ipfsResp.StatusCode != http.StatusOK {
-			return &regError{
-				Status:  http.StatusNotFound,
-				Code:    "BLOB_UNKNOWN",
-				Message: ipfsResp.Status,
-			}
-		}
-
-		// TODO ipfsResp.ContentLength could be -1
-		// copy the whole body content - not desirable
-		body, err := ioutil.ReadAll(ipfsResp.Body)
 		size := len(body)
 		resp.Header().Set("Content-Length", fmt.Sprint(size))
 		resp.Header().Set("Docker-Content-Digest", target)
-		resp.WriteHeader(ipfsResp.StatusCode)
+		resp.WriteHeader(http.StatusOK)
 		io.CopyN(resp, bytes.NewReader(body), int64(size))
 
 		return nil

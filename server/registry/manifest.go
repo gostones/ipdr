@@ -27,6 +27,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/miguelmota/ipdr/server/registry/image"
+	"github.com/miguelmota/ipdr/server/registry/store"
 )
 
 type manifest struct {
@@ -39,6 +40,8 @@ type manifests struct {
 	// maps repo -> manifest tag/digest -> manifest
 	manifests map[string]map[string]*manifest
 	lock      sync.Mutex
+
+	cidCache *cidCache
 
 	registry *registry
 }
@@ -83,9 +86,8 @@ func (m *manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 			}
 		}
 		f, _ := image.DecodeManifest(mf.blob)
-
 		for _, d := range f.Digests() {
-			m.registry.cids.Add(repo, d, cid)
+			m.cidCache.Add(repo, d, cid)
 		}
 
 		resp.Header().Set("Docker-Content-Digest", mf.digest)
@@ -173,7 +175,7 @@ func (m *manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 			}
 		}
 
-		// TODO cache e.g. move to disk?
+		//
 		m.registry.blobs.remove(repo)
 
 		refs := make(map[string][]byte)
@@ -181,7 +183,8 @@ func (m *manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 		refs[digest] = mf.blob
 		refs["latest"] = mf.blob // <cid>/latest
 
-		cid, err := m.registry.ipfsClient.AddImage(refs, layers)
+		image := store.NewImage(repo, refs, layers)
+		cid, err := m.registry.store.Save(image)
 		if err != nil {
 			return &regError{
 				Status:  http.StatusInternalServerError,
@@ -190,9 +193,8 @@ func (m *manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 			}
 		}
 
-		m.registry.cids.Add(repo, target, cid)
-		m.registry.cids.Add(repo, digest, cid)
-		m.registry.cids.Add(cid, "latest", cid) // <cid>/latest
+		m.cidCache.Add(repo, target, cid)
+		m.cidCache.Add(repo, digest, cid)
 
 		resp.Header().Set("Docker-Content-Digest", digest)
 		resp.Header().Set("X-Docker-Content-ID", cid)
@@ -230,7 +232,7 @@ func (m *manifests) fetch(repo, target string) (*manifest, error) {
 
 	// conform to the distribution registry specification
 	// in case target is tag, we need to resolve also by hash.
-	m.registry.cids.Add(repo, mf.digest, cid)
+	m.cidCache.Add(repo, mf.digest, cid)
 
 	return mf, nil
 }
@@ -242,7 +244,7 @@ func computeDigest(b []byte) string {
 }
 
 func (m *manifests) getManifest(cid, target string) (*manifest, error) {
-	b, err := getContent(m.registry.config.IPFSGateway, cid, []string{"manifests", target})
+	b, err := m.registry.store.GetManifest(cid, target)
 	if err != nil {
 		return nil, err
 	}

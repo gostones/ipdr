@@ -1,19 +1,18 @@
-package registry
+package net
 
 import (
 	"fmt"
+	"github.com/miguelmota/ipdr/ipfs"
 	"io/ioutil"
 	"net"
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/miguelmota/ipdr/ipfs"
 )
 
 // CIDResolver is the interface that maps container image repo[:reference] to content ID.
 type CIDResolver interface {
-	Resolve(repo string, reference string) []string
+	Resolve(repo string, reference string) ([]string, error)
 }
 
 // lookup resolves dnslink similar to the following
@@ -50,25 +49,27 @@ func NewFileResolver(uri string) (CIDResolver, error) {
 	}, nil
 }
 
-func (r *fileResolver) Resolve(repo, reference string) []string {
+func (r *fileResolver) Resolve(repo, reference string) ([]string, error) {
 	if reference == "" {
 		files, err := ioutil.ReadDir(fmt.Sprintf("%s/%s", r.root, repo))
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		var sa []string
 		for _, f := range files {
-			if f.Mode().IsRegular() {
-				sa = append(sa, f.Name())
-			}
+			// if f.Mode().IsRegular() {
+			// 	sa = append(sa, f.Name())
+			// }
+			sa = append(sa, f.Name())
 		}
-		return sa
+		return sa, nil
 	}
 
-	if b, err := ioutil.ReadFile(fmt.Sprintf("%s/%s/%s", r.root, repo, reference)); err == nil {
-		return []string{strings.TrimSpace(string(b))}
+	b, err := ioutil.ReadFile(fmt.Sprintf("%s/%s/:%s", r.root, repo, reference))
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return []string{strings.TrimSpace(string(b))}, nil
 }
 
 // DNSLink resolver
@@ -103,7 +104,7 @@ func NewDNSLinkResolver(client *ipfs.Client, domain string) (CIDResolver, error)
 	}, nil
 }
 
-func (r *dnslinkResolver) Resolve(repo, reference string) []string {
+func (r *dnslinkResolver) Resolve(repo, reference string) ([]string, error) {
 	return r.resolver.Resolve(repo, reference)
 }
 
@@ -120,32 +121,64 @@ func NewIPFSResolver(client *ipfs.Client, root string) (CIDResolver, error) {
 	}, nil
 }
 
-func (r *ipfsResolver) Resolve(repo string, reference string) []string {
+func (r *ipfsResolver) Resolve(repo string, reference string) ([]string, error) {
 	if reference == "" {
 		links, err := r.client.List(fmt.Sprintf("%s/%s", r.cid, repo))
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		var sa []string
 		for _, l := range links {
 			sa = append(sa, l.Name)
 		}
-		return sa
+		return sa, nil
 	}
 
-	if b, err := r.getContent(repo, reference); err == nil {
-		return []string{strings.TrimSpace(string(b))}
+	b, err := r.readCID(repo, reference)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return []string{strings.TrimSpace(string(b))}, nil
 }
 
-func (r *ipfsResolver) getContent(repo, reference string) ([]byte, error) {
-	rd, err := r.client.Cat(fmt.Sprintf("%s/%s/%s", r.cid, repo, reference))
+func (r *ipfsResolver) readCID(repo, reference string) ([]byte, error) {
+	return r.getContent(fmt.Sprintf("%s/%s/:%s", r.cid, repo, reference))
+}
+
+func (r *ipfsResolver) getContent(path string) ([]byte, error) {
+	rd, err := r.client.Cat(path)
 	if err != nil {
 		return nil, err
 	}
 	defer rd.Close()
 	return ioutil.ReadAll(rd)
+}
+
+// SCP resolver
+type scpResolver struct {
+	shell *ScpShell
+}
+
+func NewScpResolver(uri string) (CIDResolver, error) {
+	return &scpResolver{
+		shell: NewScpShell(uri),
+	}, nil
+}
+
+func (r *scpResolver) Resolve(repo string, reference string) ([]string, error) {
+	if reference == "" {
+		sa, err := r.shell.List(repo)
+		if err != nil {
+			return nil, err
+		}
+		return sa, nil
+	}
+
+	b, err := r.shell.ReadFile(filepath.Join(repo, ":"+reference))
+	if err != nil {
+		return nil, err
+	}
+	return []string{strings.TrimSpace(string(b))}, nil
 }
 
 type resolver struct {
@@ -158,6 +191,10 @@ func NewResolver(client *ipfs.Client, list []string) CIDResolver {
 		switch {
 		case strings.HasPrefix(l, "file:"):
 			if r, err := NewFileResolver(l); err == nil {
+				resolvers = append(resolvers, r)
+			}
+		case strings.HasPrefix(l, "scp:"):
+			if r, err := NewScpResolver(l); err == nil {
 				resolvers = append(resolvers, r)
 			}
 		case strings.HasPrefix(l, "/ipfs/"):
@@ -178,20 +215,24 @@ func NewResolver(client *ipfs.Client, list []string) CIDResolver {
 }
 
 // collect all results if reference is empty for listing
-func (r *resolver) Resolve(repo string, reference string) []string {
+func (r *resolver) Resolve(repo string, reference string) ([]string, error) {
 	var list []string
 	for _, re := range r.resolvers {
-		if result := re.Resolve(repo, reference); result != nil {
+		result, err := re.Resolve(repo, reference)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
 			// return early
 			if reference != "" {
-				return result
+				return result, nil
 			}
 			list = append(list, result...)
 		}
 	}
 	list = uniq(list)
 	sort.Strings(list)
-	return list
+	return list, nil
 }
 
 func uniq(sa []string) []string {

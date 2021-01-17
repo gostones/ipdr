@@ -6,6 +6,7 @@ require (
 	github.com/docker/docker v1.4.2-0.20190924003213-a8608b5b67c7
 	github.com/fatih/color v1.7.0
 	github.com/google/go-containerregistry v0.3.0
+	github.com/hnakamur/go-scp v1.0.1
 	github.com/ipfs/go-cid v0.0.7
 	github.com/ipfs/go-ipfs-api v0.0.1
 	github.com/ipfs/go-ipfs-files v0.0.1
@@ -13,6 +14,8 @@ require (
 	github.com/mattn/go-colorable v0.1.1 // indirect
 	github.com/mattn/go-isatty v0.0.6 // indirect
 	github.com/multiformats/go-multibase v0.0.3
+	github.com/multiformats/go-multihash v0.0.13
 	github.com/sirupsen/logrus v1.6.0
 	github.com/spf13/cobra v1.0.0
+	golang.org/x/crypto v0.0.0-20201002170205-7f63de1d35b0
 )

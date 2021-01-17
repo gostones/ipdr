@@ -33,6 +33,8 @@ import (
 
 	"github.com/miguelmota/ipdr/ipfs"
 	"github.com/miguelmota/ipdr/regutil"
+	"github.com/miguelmota/ipdr/server/registry/net"
+	"github.com/miguelmota/ipdr/server/registry/store"
 )
 
 var contentTypes = map[string]string{
@@ -53,12 +55,12 @@ type registry struct {
 	blobs     blobs
 	manifests manifests
 
-	cids *cidStore
-
 	config     *Config
 	ipfsClient *ipfs.Client
 
-	resolver CIDResolver
+	resolver net.CIDResolver
+
+	store store.Store
 }
 
 // https://docs.docker.com/registry/spec/api/#api-version-check
@@ -114,7 +116,12 @@ func (r *registry) dig(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	list := r.resolve(name, tag)
+	list, err := r.resolve(name, tag)
+	if err != nil {
+		resp.WriteHeader(http.StatusNotFound)
+		fmt.Println(resp, err.Error())
+		return
+	}
 	if len(list) == 0 {
 		resp.WriteHeader(http.StatusNotFound)
 		return
@@ -166,30 +173,34 @@ func (r *registry) ipfsURL(s []string) string {
 // e.g. dnslink/ipns
 func (r *registry) resolveCID(repo, reference string) (string, error) {
 	if reference == "" {
-		reference = "latest"
+		return "", fmt.Errorf("missing reference: %s:%s", repo, reference)
 	}
-	list := r.resolve(repo, reference)
+	list, err := r.resolve(repo, reference)
+	if err != nil {
+		return "", err
+	}
 	if len(list) > 0 {
 		return list[0], nil
 	}
 	return "", fmt.Errorf("cannot resolve CID: %s:%s", repo, reference)
 }
 
-func (r *registry) resolve(repo, reference string) []string {
+func (r *registry) resolve(repo, reference string) ([]string, error) {
 	r.log.Printf("resolving CID: %s:%s", repo, reference)
 
-	// local/cached
-	if cid, ok := r.cids.Get(repo, reference); ok {
-		return []string{cid}
-	}
 	// repo is a valid cid, ignore reference and assume "latest"
 	if cid := regutil.ToB32(repo); cid != "" {
-		return []string{cid}
+		return []string{cid}, nil
 	}
 	if hash := regutil.IpfsifyHash(repo); hash != "" {
 		if cid := regutil.ToB32(hash); cid != "" {
-			return []string{cid}
+			return []string{cid}, nil
 		}
+	}
+
+	// local/cached
+	if cid, ok := r.manifests.cidCache.Get(repo, reference); ok {
+		return []string{cid}, nil
 	}
 
 	// lookup
@@ -199,12 +210,21 @@ func (r *registry) resolve(repo, reference string) []string {
 // New returns a handler which implements the docker registry protocol.
 // It should be registered at the site root.
 func New(config *Config, opts ...Option) http.Handler {
-	ipfsClient := ipfs.NewRemoteClient(&ipfs.Config{
-		Host:       config.IPFSHost,
-		GatewayURL: config.IPFSGateway,
-	})
+	// ipfsClient := ipfs.NewRemoteClient(&ipfs.Config{
+	// 	Host:       config.IPFSHost,
+	// 	GatewayURL: config.IPFSGateway,
+	// })
+
+	logger := log.New(os.Stderr, "", log.LstdFlags)
+
+	// create store based on IPDR_STORE
+	uri := os.Getenv("IPDR_STORE")
+	imageStore := store.Create(uri)
+
+	logger.Printf("image store: %v", imageStore)
+
 	r := &registry{
-		log: log.New(os.Stderr, "", log.LstdFlags),
+		log: logger,
 		blobs: blobs{
 			contents: map[string][]byte{},
 			uploads:  map[string][]byte{},
@@ -212,16 +232,18 @@ func New(config *Config, opts ...Option) http.Handler {
 		},
 		manifests: manifests{
 			manifests: map[string]map[string]*manifest{},
+			cidCache:  newCidCache(),
 		},
-		cids:       newCIDStore(config.CIDStorePath),
-		ipfsClient: ipfsClient,
-		config:     config,
+		// ipfsClient: ipfsClient,
+		config: config,
+		store:  imageStore,
 	}
 	// TODO refactor so we donot have to do this?
 	r.blobs.registry = r
 	r.manifests.registry = r
 
-	r.resolver = NewResolver(ipfsClient, config.CIDResolvers)
+	// r.resolver = net.NewResolver(ipfsClient, config.CIDResolvers)
+	r.resolver = imageStore
 
 	for _, o := range opts {
 		o(r)

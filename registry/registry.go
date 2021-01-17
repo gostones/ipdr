@@ -22,6 +22,7 @@ import (
 	ipfs "github.com/miguelmota/ipdr/ipfs"
 	netutil "github.com/miguelmota/ipdr/netutil"
 	server "github.com/miguelmota/ipdr/server"
+	"github.com/miguelmota/ipdr/server/registry/store"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -30,6 +31,7 @@ type Registry struct {
 	dockerLocalRegistryHost string
 	dockerClient            *docker.Client
 	ipfsClient              *ipfs.Client
+	store                   store.Store
 	debug                   bool
 }
 
@@ -68,10 +70,13 @@ func NewRegistry(config *Config) *Registry {
 		Debug: config.Debug,
 	})
 
+	uri := os.Getenv("IPDR_STORE")
+
 	return &Registry{
 		dockerLocalRegistryHost: dockerLocalRegistryHost,
 		ipfsClient:              ipfsClient,
 		dockerClient:            dockerClient,
+		store:                   store.Create(uri),
 		debug:                   config.Debug,
 	}
 }
@@ -131,10 +136,14 @@ func (r *Registry) PushImage(reader io.Reader, imageID string) (string, error) {
 	}
 
 	r.Debugf("[registry] root dir: %s", root)
-	imageIpfsHash, err := r.uploadDir(root)
+	// imageIpfsHash, err = r.uploadDir(root)
+	// in-memory store not working/supported.
+	image, err := store.LoadImage(root + "/default")
 	if err != nil {
 		return "", err
 	}
+	image.Name = strings.SplitN(imageID, ":", 2)[0]
+	imageIpfsHash, err := r.store.Save(image)
 
 	r.Debugf("\n[registry] uploaded to /ipfs/%s\n", imageIpfsHash)
 	r.Debugf("[registry] docker image %s\n", imageIpfsHash)
